@@ -1,4 +1,7 @@
-export DSOSCone, SDSOSCone, SOSCone, getslack, addpolyconstraint!
+using MathOptInterface
+const MOI = MathOptInterface
+
+export DSOSCone, SDSOSCone, SOSCone, addpolyconstraint!
 export CoDSOSCone, CoSDSOSCone, CoSOSCone
 
 struct DSOSCone end
@@ -22,10 +25,10 @@ const SOSLikeCones = Union{DSOSCone, SDSOSCone, SOSCone, NonNegPoly}
 const CoSOSLikeCones = Union{CoDSOSCone, CoSDSOSCone, CoSOSCone}
 const NonNegPolySubCones = Union{CoSOSLikeCones, SOSLikeCones}
 
-struct SOSConstraint{MT <: AbstractMonomial, MVT <: AbstractVector{MT}, JS<:JuMP.AbstractJuMPScalar, JC<:JuMP.AbstractConstraint}
+struct SOSConstraint{MT <: AbstractMonomial, MVT <: AbstractVector{MT}, JS<:JuMP.AbstractJuMPScalar, T}
     # JS is AffExpr for CoSOS and is Variable for SOS
     slack::MatPolynomial{JS, MT, MVT}
-    lincons::Vector{JuMP.ConstraintRef{JuMP.Model, JC}}
+    lincons::JuMP.ConstraintRef{JuMP.Model, MOI.ConstraintReference{MOI.VectorAffineFunction{T}, MOI.Zeros}}
     x::MVT
 end
 
@@ -35,8 +38,9 @@ function JuMP.getdual(c::SOSConstraint)
 end
 
 function addpolyconstraint!(m::JuMP.Model, p, s::ZeroPoly, domain::FullSpace)
-    constraints = JuMP.constructconstraint!.(coefficients(p), :(==))
-    JuMP.addVectorizedConstraint(m, constraints)
+    coeffs = collect(coefficients(p))
+    c = JuMP.constructconstraint!(coeffs, MOI.Zeros(length(coeffs)))
+    JuMP.addconstraint(m, c)
 end
 
 function addpolyconstraint!(m::JuMP.Model, p, s::ZeroPoly, domain::AbstractAlgebraicSet)
@@ -60,11 +64,13 @@ function addpolyconstraint!(m::JuMP.Model, P::Matrix{PT}, ::PSDCone, domain::Abs
 end
 
 function _createslack(m, x, set::SOSLikeCones)
-    createpoly(m, _varconetype(set)(x), :Cont)
+    createpoly(m, _varconetype(set)(x), false, false)
 end
 function _matposynomial(m, x)
-    p = _matpolynomial(m, x, :Cont)
-    m.colLower[map(q -> q.col, p.Q)] = 0.
+    p = _matpolynomial(m, x, false, false)
+    for q in p.Q
+        JuMP.setlowerbound(q, 0)
+    end
     p
 end
 function _createslack(m, x, set::CoSOSLikeCones)
@@ -91,7 +97,7 @@ function addpolyconstraint!(m::JuMP.Model, p, set::NonNegPolySubCones, domain::B
         # FIXME handle the case where `p`, `q_i`, ...  do not have the same variables
         # so instead of `variable(p)` we would have the union of them all
         @assert variables(q) ⊆ variables(p)
-        s = createpoly(m, _varconetype(set)(monomials(variables(p), mind:maxd)), :Cont)
+        s = createpoly(m, _varconetype(set)(monomials(variables(p), mind:maxd)), false, false)
         p -= s*q
     end
     addpolyconstraint!(m, p, set, domain.V)

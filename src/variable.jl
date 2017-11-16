@@ -1,7 +1,7 @@
 export polytype, createpoly, DSOSPoly, SDSOSPoly, SOSPoly
 
-function JuMP.getvalue(p::MatPolynomial{JuMP.Variable})
-    MatPolynomial(map(getvalue, p.Q), p.x)
+function JuMP.resultvalue(p::MatPolynomial{JuMP.Variable})
+    MatPolynomial(map(JuMP.resultvalue, p.Q), p.x)
 end
 
 for poly in (:DSOSPoly, :SDSOSPoly, :SOSPoly)
@@ -24,14 +24,24 @@ polytype(m::JuMP.Model, p, X::AbstractVector) = _polytype(m, p, monovec(X))
 _polytype(m::JuMP.Model, ::Poly{false}, x::AbstractVector{MT}) where MT<:AbstractMonomial = polynomialtype(MT, JuMP.Variable)
 
 # x should be sorted and without duplicates
-function _createpoly(m::JuMP.Model, ::Poly{false}, x::AbstractVector{<:AbstractMonomial}, category::Symbol)
-    polynomial((i) -> Variable(m, -Inf, Inf, category), x)
+function _createpoly(m::JuMP.Model, ::Poly{false}, x::AbstractVector{<:AbstractMonomial}, binary::Bool, integer::Bool)
+    function _newvar(i)
+        v = Variable(m)
+        if binary
+            setbinary(v)
+        end
+        if integer
+            setinteger(v)
+        end
+        v
+    end
+    polynomial(_newvar, x)
 end
-function createpoly(m::JuMP.Model, p::Union{Poly{false, :Default}, Poly{false, :Classic}}, category::Symbol)
-    _createpoly(m, p, monovec(p.x), category)
+function createpoly(m::JuMP.Model, p::Union{Poly{false, :Default}, Poly{false, :Classic}}, binary::Bool, integer::Bool)
+    _createpoly(m, p, monovec(p.x), binary, integer)
 end
-function createpoly(m::JuMP.Model, p::Poly{false, :Gram}, category::Symbol)
-    _createpoly(m, p, monomials(sum(p.x)^2), category)
+function createpoly(m::JuMP.Model, p::Poly{false, :Gram}, binary::Bool, integer::Bool)
+    _createpoly(m, p, monomials(sum(p.x)^2), binary, integer)
 end
 
 # Sum-of-Squares polynomial
@@ -39,7 +49,7 @@ end
 _polytype(m::JuMP.Model, ::PosPoly, x::MVT) where {MT<:AbstractMonomial, MVT<:AbstractVector{MT}} = MatPolynomial{JuMP.Variable, MT, MVT}
 
 function _constraintmatpoly!(m, p, ::Union{SOSPoly, Poly{true}})
-    push!(m.varCones, (:SDP, p.Q[1].col:p.Q[end].col))
+    JuMP.addconstraint(m, JuMP.SDVariableConstraint(p.Q))
 end
 function _constraintmatpoly!(m, p, ::DSOSPoly)
     n = length(p.x)
@@ -49,7 +59,7 @@ function _constraintmatpoly!(m, p, ::DSOSPoly)
             if i == j
                 Q[i, j] = p[i, j]
             else
-                Q[j, i] = Q[i, j] = Variable(m, -Inf, Inf, :Cont)
+                Q[j, i] = Q[i, j] = Variable(m)
                 @constraint m Q[i, j] >= p[i, j]
                 @constraint m Q[i, j] >= -p[i, j]
             end
@@ -62,32 +72,40 @@ function _constraintmatpoly!(m, p, ::DSOSPoly)
     # Adding things on varCones makes JuMP think that it is SDP
     # push!(m.varCones, (:NonNeg, map(i -> p[i, i].col, 1:n)))
 end
-function _matpolynomial(m, x::AbstractVector{<:AbstractMonomial}, category::Symbol)
+function _matpolynomial(m, x::AbstractVector{<:AbstractMonomial}, binary::Bool, integer::Bool)
     if isempty(x)
         zero(polytype(m, SOSPoly(x)))
     else
-        if length(x) == 1
-            # 1x1 matrix is SDP iff its only entry is nonnegative
-            # We handle this case here and do not create any SDP constraint
-            lb = 0.
-        else
-            lb = -Inf
+        function _newvar(i, j)
+            v = Variable(m)
+            if length(x) == 1
+                # 1x1 matrix is SDP iff its only entry is nonnegative
+                # We handle this case here and do not create any SDP constraint
+                setlowerbound(v, 0)
+            end
+            if binary
+                setbinary(v)
+            end
+            if integer
+                setinteger(v)
+            end
+            v
         end
-        MatPolynomial{JuMP.Variable}((i, j) -> Variable(m, lb, Inf, category), x)
+        MatPolynomial{JuMP.Variable}(_newvar, x)
     end
 end
-function _createpoly(m::JuMP.Model, set::PosPoly, x::AbstractVector{<:AbstractMonomial}, category::Symbol)
-    p = _matpolynomial(m, x, category)
+function _createpoly(m::JuMP.Model, set::PosPoly, x::AbstractVector{<:AbstractMonomial}, binary::Bool, integer::Bool)
+    p = _matpolynomial(m, x, binary, integer)
     if length(x) > 1
         _constraintmatpoly!(m, p, set)
     end
     p
 end
-function createpoly(m::JuMP.Model, p::Union{PosPoly{:Default}, PosPoly{:Gram}}, category::Symbol)
-    _createpoly(m, p, monovec(p.x), category)
+function createpoly(m::JuMP.Model, p::Union{PosPoly{:Default}, PosPoly{:Gram}}, binary::Bool, integer::Bool)
+    _createpoly(m, p, monovec(p.x), binary, integer)
 end
-function createpoly(m::JuMP.Model, pp::PosPoly{:Classic}, category::Symbol)
-    p = _createpoly(m, pp, getmonomialsforcertificate(pp.x), category)
+function createpoly(m::JuMP.Model, pp::PosPoly{:Classic}, binary::Bool, integer::Bool)
+    p = _createpoly(m, pp, getmonomialsforcertificate(pp.x), binary, integer)
     # The coefficients of a monomial not in Z do not all have to be zero, only their sum
     addpolyconstraint!(m, removemonomials(Polynomial(p), p.x), ZeroPoly(), FullSpace())
     p
