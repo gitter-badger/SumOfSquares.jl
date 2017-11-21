@@ -26,8 +26,9 @@ import JuMP: validmodel, addtoexpr_reorder
 include("variable.jl")
 include("constraint.jl")
 
-function SOSModel(; kwargs...)
+function SOSModel(; solver=()->nothing, kwargs...)
     m = Model(; kwargs...)
+    PolyJuMP.getpolydata(m).solver = solver
     setpolymodule!(m, SumOfSquares)
     m
 end

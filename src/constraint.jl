@@ -32,8 +32,8 @@ struct SOSConstraint{MT <: AbstractMonomial, MVT <: AbstractVector{MT}, JS<:JuMP
     x::MVT
 end
 
-function JuMP.getdual(c::SOSConstraint)
-    a = [getdual(lc) for lc in c.lincons]
+function JuMP.resultdual(c::SOSConstraint)
+    a = JuMP.resultdual(c.lincons)
     Measure(a, c.x)
 end
 
